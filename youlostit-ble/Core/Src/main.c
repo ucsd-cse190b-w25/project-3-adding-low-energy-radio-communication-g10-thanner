@@ -20,13 +20,36 @@
 /* Includes ------------------------------------------------------------------*/
 //#include "ble_commands.h"
 #include "ble.h"
+#include "timer.h"
+#include "i2c.h"
+#include "lsm6dsl.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#define LSM6DSL_ADDR 0x6A      			// Accelerometer address
+#define WHO_AM_I_REG 0x0F      			// WHO_AM_I register for LSM6DSL
+
+#define MOVEMENT_THRESHOLD 2000     	// Max movement until movement triggered
+#define LOST_TIME_THRESHOLD 60000  		// 60 seconds in milliseconds
+
+#define PREAMBLE 0b01100110       		// 8-bit preamble
+#define USER_ID  0b0001101011011100  	// 16-bit ID (6876)
+#define TOTAL_BITS 32					// 8 bit preamble + 16 bit userID + 8 bit time since lost
+
+// Global Variables for states
+volatile uint8_t timer_flag = 0;	 	// timer flag which is set by interrupt handler, read/cleared by main loop
+volatile uint8_t is_lost = 0;		 	// flag for lost state.
+volatile uint32_t time_still = 0;	 	// value for how long device has been still
+
+unsigned char device_name[] = "TannTag";
 
 int dataAvailable = 0;
 
 SPI_HandleTypeDef hspi3;
 
+void privtag_run();
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI3_Init(void);
@@ -56,21 +79,110 @@ int main(void)
 
   HAL_Delay(10);
 
-  uint8_t nonDiscoverable = 0;
+  privtag_run();
 
-  while (1)
-  {
-	  if(!nonDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)){
-	    catchBLE();
-	  }else{
-		  HAL_Delay(1000);
-		  // Send a string to the NORDIC UART service, remember to not include the newline
-		  unsigned char test_str[] = "youlostit BLE test";
-		  updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, sizeof(test_str)-1, test_str);
-	  }
-	  // Wait for interrupt, only uncomment if low power is needed
-	  //__WFI();
-  }
+//uint8_t nonDiscoverable = 0;
+
+//  while (1)
+//  {
+//	  if(!nonDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)){
+//	    catchBLE();
+//	  }else{
+//		  HAL_Delay(1000);
+//		  // Send a string to the NORDIC UART service, remember to not include the newline
+//		  unsigned char test_str[] = "youlostit BLE (tanner)";
+//		  updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, sizeof(test_str)-1, test_str);
+//	  }
+//	  // Wait for interrupt, only uncomment if low power is needed
+//	  //__WFI();
+//  }
+}
+
+void privtag_run() {
+	//Initialize peripherals
+	i2c_init();
+	lsm6dsl_init();
+
+	//Initialize timer to be in 100 ms intervals
+	timer_init(TIM2);
+	timer_set_ms(TIM2, 50);
+
+	int16_t x, y, z;
+	int16_t prev_x, prev_y, prev_z;
+
+	uint8_t device_moved_flag;
+
+
+	while (1) {
+
+		if (timer_flag) { // Every time there is a timer tick (currently set at 100ns intervals (1/10 s))...
+			timer_flag = 0;
+			lsm6dsl_read_xyz(&x, &y, &z);  // Read acceleration data
+
+			// Calculate total magnitude of change in movement
+			int32_t delta_x = abs(x - prev_x);
+			int32_t delta_y = abs(y - prev_y);
+			int32_t delta_z = abs(z - prev_z);
+			int32_t total_movement = delta_x + delta_y + delta_z;
+
+//			printf("X: %6d  [Change: %5d]   Y: %6d  [Change: %5d]   Z: %6d  [Change: %5d]\n",
+//					  x, x - prev_x,
+//					  y, y - prev_y,
+//					  z, z - prev_z);
+//			printf("Total Movement: %d\n",total_movement);
+
+			prev_x = x;
+			prev_y = y;
+			prev_z = z;
+
+			//If our device's total movement is beyond threshold, update device moved flag.
+			if (total_movement > MOVEMENT_THRESHOLD) { device_moved_flag = 1; }
+			else { device_moved_flag = 0; }
+
+			//If device DID move.
+			if (device_moved_flag) {
+				is_lost = 0;
+				time_still = 0;
+			}
+			else {
+				if (time_still >= LOST_TIME_THRESHOLD && !is_lost) { // If has been still for THRESHOLD, and isnt already lost...
+					is_lost = 1;									 // THEN, device is LOST! (Enter lost mode)
+				}
+			}
+
+			if (is_lost) { //BLINKING LOGIC
+
+				// calculating minutes lost
+				//uint8_t minutes_since_lost = (time_still - LOST_TIME_THRESHOLD) / 60000;
+				uint16_t seconds_since_lost = (time_still - LOST_TIME_THRESHOLD) / 1000;
+
+
+				if ((time_still % 10000) == 0) {
+				    unsigned char formatted_str[32];
+				    snprintf((char*)formatted_str, sizeof(formatted_str), "%s %u", device_name, seconds_since_lost);
+
+				    // Use strlen to get the actual string length
+				    int str_len = strlen((char*)formatted_str);
+
+				    updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, str_len, formatted_str);
+				}
+
+				//printf("device is currently lost --> %d --> min: %d\n", time_still, minutes_since_lost);
+			}
+			else {
+				//printf("device is not lost --> time still: %d\n",time_still);
+			}
+
+		}
+	}
+
+}
+
+void TIM2_IRQHandler()
+{
+	time_still = time_still + 50;
+    TIM2->SR &= ~TIM_SR_UIF;  // Clear interrupt flag
+    timer_flag = 1;      	  // Set flag for main loop
 }
 
 /**

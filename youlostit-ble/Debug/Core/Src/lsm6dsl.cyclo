@@ -1,0 +1,2 @@
+../Core/Src/lsm6dsl.c:21:6:lsm6dsl_init	1
+../Core/Src/lsm6dsl.c:42:6:lsm6dsl_read_xyz	1
