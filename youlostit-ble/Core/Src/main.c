@@ -51,7 +51,7 @@ static void MX_SPI3_Init(void);
 void privtag_run();
 
 #define MOVEMENT_THRESHOLD 4000     	// Max movement until movement triggered
-#define LOST_TIME_THRESHOLD 60000  		// 60 seconds in milliseconds
+#define LOST_TIME_THRESHOLD 10000  		// 60 seconds in milliseconds
 
 // Global Variables for states
 volatile uint8_t timer_flag = 0;	 	// timer flag which is set by interrupt handler, read/cleared by main loop
@@ -103,7 +103,7 @@ void TIM2_IRQHandler()
 {
     TIM2->SR &= ~TIM_SR_UIF;  	   // Clear interrupt flag
     timer_flag = 1;      	  	   // Set flag for main loop
-	time_still = time_still + 50;  // Each time the the IRQHandler gets call, time has percisely increased by 50ms
+	time_still = time_still + 10000;  // Each time the the IRQHandler gets call, time has percisely increased by 50ms
     if((time_still % 10000) == 0){ // 10000ms = 10s (Checking to change send message flag every 10 seconds
     	send_message = 1;
     }
@@ -116,7 +116,7 @@ void privtag_run() {
 
 	// Initialize timer to be in 50 ms intervals
 	timer_init(TIM2);
-	timer_set_ms(TIM2, 50);
+	timer_set_ms(TIM2, 10000);
 
 	// x y z variables to hold current accelerations in the x y z acceleration values
 	int16_t x, y, z;
@@ -191,6 +191,7 @@ void privtag_run() {
 				if (!nonDiscoverable) {
 						disconnectBLE();
 				        setDiscoverability(0);
+				        standbyBle();
 				        nonDiscoverable = 1;
 				}
 			}
@@ -233,6 +234,18 @@ void privtag_run() {
 				printf("(NOT LOST) Time still: %d, minutes lost: %d\n", time_still, minutes_since_lost);
 			}
 		}
+
+		//Sleep mode stuff
+
+		//Clearing deep sleep bit
+
+		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+
+		//clearing pending interrupts
+		__disable_irq();
+
+		__asm volatile ("wfi");
+		__enable_irq();
 	}
 }
 
