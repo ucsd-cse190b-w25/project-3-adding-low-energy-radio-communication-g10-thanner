@@ -9,10 +9,13 @@
 
 const int MAX_PSC_VALUE = 65536;
 
-const int CHOSEN_PSC_VALUE = 7999;
+const int CHOSEN_PSC_VALUE = 31;  // Prescaler for 32 kHz clock (32 - 1)
 
 void timer_init(TIM_TypeDef* timer)
 {
+	//We're going to assign our timer to a seperate clock so that we can dynamically change system clock
+	RCC->CSR |= RCC_CSR_LSION;  // Enable LSI
+	while ((RCC->CSR & RCC_CSR_LSIRDY) == 0);  // Loop to wait for LSI to stabilize
 
 	//Give the clock to the timer, basically for power
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
@@ -32,6 +35,10 @@ void timer_init(TIM_TypeDef* timer)
 
 	//Enable the timer DMA interrupt event register
 	timer->DIER |= TIM_DIER_UIE;
+
+	//Configure TIM2 to use LSI as the clock source
+	timer->SMCR |= TIM_SMCR_SMS_2 | TIM_SMCR_SMS_1;  // Slave mode: External clock mode 1
+	timer->SMCR |= TIM_SMCR_TS_2 | TIM_SMCR_TS_1;    // Trigger selection: TI1 (internal trigger)
 
 	//Setting clock prescaler to a safe initial value (max)
 	timer->PSC = MAX_PSC_VALUE;
@@ -60,7 +67,7 @@ void timer_set_ms(TIM_TypeDef* timer, uint16_t period_ms)
 	timer->PSC = CHOSEN_PSC_VALUE;
 
 	//Setting our Auto Reload Register to the period_ms which aligns with our chosen PSC Value
-	timer->ARR = period_ms - 1;
+	timer->ARR = (period_ms * 32) - 1;
 
 	// Restart the timer
     timer->CR1 |= TIM_CR1_CEN;
