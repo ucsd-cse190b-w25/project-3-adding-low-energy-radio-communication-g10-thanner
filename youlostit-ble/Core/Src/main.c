@@ -191,7 +191,7 @@ void privtag_run() {
 				if (!nonDiscoverable) {
 						disconnectBLE();
 				        setDiscoverability(0);
-				        standbyBle();
+				        //standbyBle();
 				        nonDiscoverable = 1;
 				}
 			}
