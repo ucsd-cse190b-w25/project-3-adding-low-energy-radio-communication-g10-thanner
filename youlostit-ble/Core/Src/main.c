@@ -52,6 +52,7 @@ void privtag_run();
 
 #define MOVEMENT_THRESHOLD 4000     	// Max movement until movement triggered
 #define LOST_TIME_THRESHOLD 60000  		// 60 seconds in milliseconds
+#define USE_LPTIM 1  // Set to 1 to use LPTIM, 0 to use TIM2
 
 // Global Variables for states
 volatile uint8_t timer_flag = 0;	 	// timer flag which is set by interrupt handler, read/cleared by main loop
@@ -94,6 +95,9 @@ int main(void)
   // Initialize the ble configurations
   ble_init();
 
+
+  NVIC_SetPendingIRQ(LPTIM1_IRQn);
+
   privtag_run();				   // Call the privtag_run function to start the "application"
   	for(;;);					   // Infinite loop so the program keeps running (the priv_tag should run forever though since there is a infinite while loop in there)
 
@@ -108,6 +112,42 @@ void TIM2_IRQHandler()
     	send_message = 1;
     }
 }
+
+volatile uint32_t interrupt_count = 0;
+
+void LPTIM1_IRQHandler()
+{
+    // Prevent re-entrancy
+    __disable_irq();
+
+    // Extensive diagnostic logging
+    printf("!!!!! LPTIM1 INTERRUPT TRIGGERED !!!!!\n");
+    printf("Interrupt Status Register: 0x%08X\n", LPTIM1->ISR);
+    printf("Interrupt Enable Register: 0x%08X\n", LPTIM1->IER);
+    printf("Control Register: 0x%08X\n", LPTIM1->CR);
+
+    // Check for auto-reload match interrupt
+    if (LPTIM1->ISR & LPTIM_ISR_ARRM) {
+        printf("Auto-Reload Match Interrupt Detected!\n");
+
+        // Clear the interrupt flag
+        LPTIM1->ICR = LPTIM_ICR_ARRMCF;
+
+        // Set timer flag
+        timer_flag = 1;
+        time_still += 1000;
+
+        if ((time_still % 10000) == 0) {
+            send_message = 1;
+        }
+    }
+    else {
+        printf("WARNING: No Interrupt Flag Set!\n");
+    }
+
+    __enable_irq();
+}
+
 
 void privtag_run() {
 	//Initialize peripherals
@@ -128,9 +168,23 @@ void privtag_run() {
 	}
 
 
+
+
 	// Initialize timer to be in 50 ms intervals
-	timer_init(TIM2);
-	timer_set_ms(TIM2, 1000);
+//	timer_init(TIM2);
+//	timer_set_ms(TIM2, 1000);
+	#if USE_LPTIM
+		printf("Using LPTIM1 for low-power operation\n");
+		low_timer_init(LPTIM1);
+		printf("After low_timer_init() call\n");  // Add this line
+		low_timer_set_ms(LPTIM1, 1000);
+		printf("After low_timer_set_ms() call\n");  // Add this line
+	#else
+		printf("Using TIM2 for normal operation\n");
+		timer_init(TIM2);
+		timer_set_ms(TIM2, 1000);
+		printf("IS THIS WORKING\n");
+	#endif
 
 	// x y z variables to hold current accelerations in the x y z acceleration values
 	int16_t x, y, z;
@@ -164,13 +218,20 @@ void privtag_run() {
 	// Hard coded name for the device
 	unsigned char device_name[] = "TaneTag";
 
+
+
+
 	while (1) {
 
 		if(!nonDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)){
 				catchBLE();
 		}
 
+		printf("Main loop iteration. timer_flag: %d\n", timer_flag);
+
+
 		if (timer_flag) { 			       // This triggers every 50 ms
+			printf("Timer flag is set!\n");
 			timer_flag = 0; 			   // Reset the timer flag
 			lsm6dsl_read_xyz(&x, &y, &z);  // Read acceleration data
 
@@ -248,13 +309,13 @@ void privtag_run() {
 			}
 		}
 
-		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
-
-				//clearing pending interrupts
-				__disable_irq();
-
-				__asm volatile ("wfi");
-				__enable_irq();
+//		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+//
+//				//clearing pending interrupts
+//				__disable_irq();
+//
+//				__asm volatile ("wfi");
+//				__enable_irq();
 	}
 }
 
@@ -302,6 +363,11 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+  // Explicitly enable low-power timer clock
+      RCC->APB1ENR1 |= RCC_APB1ENR1_LPTIM1EN;
+
+      printf("System Clock Config - LPTIM1 Clock: %s\n",
+             (RCC->APB1ENR1 & RCC_APB1ENR1_LPTIM1EN) ? "ENABLED" : "DISABLED");
 }
 
 /**

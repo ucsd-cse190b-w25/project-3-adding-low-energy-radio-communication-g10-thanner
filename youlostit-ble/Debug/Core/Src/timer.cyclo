@@ -1,5 +1,10 @@
 ../Drivers/CMSIS/Include/core_cm4.h:1679:22:__NVIC_EnableIRQ	2
+../Drivers/CMSIS/Include/core_cm4.h:1698:26:__NVIC_GetEnableIRQ	2
+../Drivers/CMSIS/Include/core_cm4.h:1770:22:__NVIC_ClearPendingIRQ	2
 ../Drivers/CMSIS/Include/core_cm4.h:1809:22:__NVIC_SetPriority	2
 ../Core/Src/timer.c:14:6:timer_init	1
 ../Core/Src/timer.c:44:6:timer_reset	1
 ../Core/Src/timer.c:51:6:timer_set_ms	1
+../Core/Src/timer.c:70:6:low_timer_init	5
+../Core/Src/timer.c:151:6:low_timer_reset	1
+../Core/Src/timer.c:183:6:low_timer_set_ms	3
