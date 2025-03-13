@@ -152,5 +152,5 @@ void lptim_init(void) {
 }
 
 void set_low_timer_ms() {
-	LPTIM1->ARR = 1000; // 1 ms period (adjust as needed)
+	LPTIM1->ARR = 5000; // 1 ms period (adjust as needed)
 }

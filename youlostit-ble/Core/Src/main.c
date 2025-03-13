@@ -95,7 +95,7 @@ int main(void)
   // Initialize the ble configurations
   ble_init();
 
-  leds_set(0b11);
+  // leds_set(0b11);
 
   privtag_run();				   // Call the privtag_run function to start the "application"
   	for(;;);					   // Infinite loop so the program keeps running (the priv_tag should run forever though since there is a infinite while loop in there)
@@ -125,7 +125,7 @@ void LPTIM1_IRQHandler(void)
         timer_flag = 1;
 
         // Increment time_still (now 1000 ms per interrupt instead of 50 ms)
-        time_still += 1000;
+        time_still += 5000;
 
         // Check for 10-second interval
         if ((time_still % 10000) == 0) {
@@ -138,7 +138,11 @@ void privtag_run() {
 	//Initialize peripherals
 	i2c_init();
 	lsm6dsl_init();
-	leds_init();
+
+	//disable_unused_peripherals();
+	disable_unused_peripherals_register();
+
+	// leds_init();
 
 //
 //	FLASH->ACR &= ~0b111;
@@ -193,10 +197,21 @@ void privtag_run() {
 
 	SystemClock_LowPower_Config();
 
+	// Set the LPR (Low-Power Run) bit in PWR_CR1 register
+	PWR->CR1 |= PWR_CR1_LPR;
+
 	// Hard coded name for the device
 	unsigned char device_name[] = "TaneTag";
 
 	while (1) {
+        // Immediately prepare for sleep
+        SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;  // Ensure standard sleep mode
+        //__disable_irq();
+        HAL_SuspendTick();
+        __WFI();  // Immediately wait for interrupt
+        //__enable_irq();
+        HAL_ResumeTick();
+		//enter_low_power_run_mode();
 
 		if(!nonDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)){
 			SystemClock_FullSpeed_Config();
@@ -233,7 +248,7 @@ void privtag_run() {
 
 			//If device DID move.
 			if (device_moved_flag) {
-				leds_set(0b11);
+				//leds_set(0b11);
 				is_lost = 0;										 // If device moved, turn is lost mode to be OFF
 				time_still = 0;										 // If device moved, reset the time that it was still to be 0
 				minutes_since_lost = 0;								 // If device moved, reset the minutes since lost to be 0
@@ -252,7 +267,7 @@ void privtag_run() {
 			else {
 			    if (time_still >= LOST_TIME_THRESHOLD && !is_lost) { // If the device has been there for long as the threshold, and it is not currently lost, turn on lost mode
 			        is_lost = 1;
-			        leds_set(0b00);
+			        // leds_set(0b00);
 			        //If the device is in non discoverable mode, then we set the discoverability to be true, and set the nonDiscoverable flag to be false
 			        if (nonDiscoverable) {
 			        	SystemClock_FullSpeed_Config();
@@ -277,7 +292,7 @@ void privtag_run() {
 
 					SystemClock_FullSpeed_Config();
 
-					leds_set(0b01);
+					// leds_set(0b01);
 
 					//Build the string to send out
 					unsigned char formatted_str[32];
@@ -290,7 +305,7 @@ void privtag_run() {
 					updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, str_len, formatted_str);
 					send_message = 0;
 
-					leds_set(0b10);
+					// leds_set(0b10);
 
 					SystemClock_LowPower_Config();
 				}
@@ -304,17 +319,190 @@ void privtag_run() {
 				printf("(NOT LOST) current system clock is %lu Hz\n", HAL_RCC_GetSysClockFreq());
 			}
 		}
-
-		SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
-
-		//clearing pending interrupts
-		__disable_irq();
-
-		__asm volatile ("wfi");
-		__enable_irq();
 	}
 }
 
+void configure_stop0_wakeup(void) {
+    // Configure LPTIM1 as wakeup source on EXTI line 32
+    // Note: Line 32 is in IMR2, so we use EXTI->IMR2
+    EXTI->IMR2 |= EXTI_IMR2_IM32;  // Enable LPTIM1 interrupt on EXTI line 32
+
+    // Optionally, configure other wakeup sources as needed
+}
+
+void enter_stop0_mode(void) {
+	// Clear STOPWUCK bit to select MSI oscillator when waking from Stop mode
+	RCC->CFGR &= ~RCC_CFGR_STOPWUCK;
+
+    // Configure wakeup sources
+    configure_stop0_wakeup();
+
+    // Set SLEEPDEEP bit
+    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
+
+    // Configure LPMS bits for Stop 0 mode
+    PWR->CR1 &= ~PWR_CR1_LPMS;  // Clear LPMS bits
+
+    // Clear any pending EXTI interrupts
+    EXTI->PR1 = 0xFFFFFFFF;
+
+    // Suspend HAL Tick
+    HAL_SuspendTick();
+
+    // Enter Stop 0 mode
+    __WFI();
+
+    // After wakeup
+    HAL_ResumeTick();
+}
+
+void enter_low_power_run_mode(void) {
+    // Enable Low-Power Run mode using direct register manipulation
+
+    // Set the LPR (Low-Power Run) bit in PWR_CR1 register
+    PWR->CR1 |= PWR_CR1_LPR;
+
+    printf("Entered Low-Power Run Mode via register\n");
+}
+
+void exit_low_power_run_mode(void) {
+    // Clear the LPR (Low-Power Run) bit in PWR_CR1 register
+    PWR->CR1 &= ~PWR_CR1_LPR;
+
+    printf("Exited Low-Power Run Mode via register\n");
+}
+
+
+void enter_low_power_sleep_mode(void) {
+    // Set the Low-Power Run bit
+    HAL_PWREx_EnableLowPowerRunMode();
+
+    // Prepare to enter Low-Power Sleep mode
+
+    // Clear any pending interrupts
+    __disable_irq();
+
+    // Clear SLEEPDEEP bit to ensure we enter standard Sleep mode
+    SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+
+    // Optional: Configure wakeup sources if needed
+
+    // Enter Sleep mode
+    // WFI = Wait For Interrupt instruction
+    __WFI();
+
+    // Code continues after wakeup
+
+    // Disable Low-Power Run mode
+    HAL_PWREx_DisableLowPowerRunMode();
+
+    __enable_irq();
+
+    printf("Woke up from Low-Power Sleep mode\n");
+}
+
+void disable_unused_peripherals(void) {
+    // Disable unused GPIO ports (DOESNT" WORK)
+//    __HAL_RCC_GPIOB_CLK_DISABLE();
+//    __HAL_RCC_GPIOC_CLK_DISABLE();
+//    __HAL_RCC_GPIOD_CLK_DISABLE();
+//    __HAL_RCC_GPIOE_CLK_DISABLE();
+
+    // Disable all communication interfaces (WORKS)
+    __HAL_RCC_USART1_CLK_DISABLE();
+    __HAL_RCC_USART2_CLK_DISABLE();
+    __HAL_RCC_USART3_CLK_DISABLE();
+    __HAL_RCC_UART4_CLK_DISABLE();
+    __HAL_RCC_UART5_CLK_DISABLE();
+
+    // Disable unused I2C (WORKS)
+    __HAL_RCC_I2C1_CLK_DISABLE();
+    __HAL_RCC_I2C3_CLK_DISABLE();
+
+    // Disable unused SPI (WORKS
+    __HAL_RCC_SPI1_CLK_DISABLE();
+    __HAL_RCC_SPI2_CLK_DISABLE();
+
+    // Disable ADC (WORKS)
+    __HAL_RCC_ADC_CLK_DISABLE();
+
+    // Disable DAC (WORKS)
+    __HAL_RCC_DAC1_CLK_DISABLE();
+
+    // Disable all timers except those in use (WORKS)
+    __HAL_RCC_TIM2_CLK_DISABLE();  // Disable if not using TIM2
+    __HAL_RCC_TIM3_CLK_DISABLE();
+    __HAL_RCC_TIM4_CLK_DISABLE();
+    __HAL_RCC_TIM5_CLK_DISABLE();
+    __HAL_RCC_TIM6_CLK_DISABLE();
+    __HAL_RCC_TIM7_CLK_DISABLE();
+
+    // Disable CAN
+    __HAL_RCC_CAN1_CLK_DISABLE();
+
+//    // Disable USB
+//    //__HAL_RCC_USB_CLK_DISABLE();
+//    // Option 2 (more explicit register manipulation)
+//    //RCC->APB1ENR1 &= ~RCC_APB1ENR1_USBFSEN;
+    // Binary representation
+    RCC->APB1ENR1 &= ~0b00000100000000000000000000000000;
+
+
+//    // Disable cryptographic accelerator
+////    __HAL_RCC_AES_CLK_DISABLE();
+////
+////    // Optional: Disable other potential unused peripherals
+////    __HAL_RCC_DFSDM1_CLK_DISABLE();
+////    __HAL_RCC_CORDIC_CLK_DISABLE();
+////    __HAL_RCC_FMAC_CLK_DISABLE();
+}
+
+// Function using direct register manipulation
+void disable_unused_peripherals_register(void) {
+    // Disable GPIO ports clock enable registers
+//    RCC->AHB2ENR &= ~(RCC_AHB2ENR_GPIOBEN |
+//                      RCC_AHB2ENR_GPIOCEN |
+//                      RCC_AHB2ENR_GPIODEN |
+//                      RCC_AHB2ENR_GPIOEEN);
+
+    // Disable USART clocks
+    RCC->APB2ENR &= ~(RCC_APB2ENR_USART1EN);
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_USART2EN |
+                       RCC_APB1ENR1_USART3EN);
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_UART4EN |
+                       RCC_APB1ENR1_UART5EN);
+
+    // Disable I2C clocks
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_I2C1EN |
+                       RCC_APB1ENR1_I2C3EN);
+
+    // Disable SPI clocks
+    RCC->APB2ENR &= ~(RCC_APB2ENR_SPI1EN);
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_SPI2EN);
+
+    // Disable ADC clock
+    RCC->AHB2ENR &= ~(RCC_AHB2ENR_ADCEN);
+
+    // Disable DAC clock
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_DAC1EN);
+
+    // Disable Timer clocks
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_TIM2EN |
+                       RCC_APB1ENR1_TIM3EN |
+                       RCC_APB1ENR1_TIM4EN |
+                       RCC_APB1ENR1_TIM5EN |
+                       RCC_APB1ENR1_TIM6EN |
+                       RCC_APB1ENR1_TIM7EN);
+
+    // Disable CAN clock
+    RCC->APB1ENR1 &= ~(RCC_APB1ENR1_CAN1EN);
+
+    // Disable USB clock
+    RCC->APB1ENR1 &= ~(1 << 26);
+
+    // Disable AES
+    //RCC->AHB2ENR &= ~(RCC_AHB2ENR_AESEN);
+}
 
 void SystemClock_LowPower_Config(void)
 {
